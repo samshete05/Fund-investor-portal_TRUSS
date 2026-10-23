@@ -8,6 +8,8 @@ import {
 import '../dashboard.css'
 import AdminApplicationReview from './AdminApplicationReview'
 import InvestorApplicationStatus from './InvestorApplicationStatus'
+import AdminProviderWorkflows from './AdminProviderWorkflows'
+import InvestorProviderWorkflow from './InvestorProviderWorkflow'
 type PortalRole = 'investor' | 'admin'
 type ActivityItem = { title: string; detail: string; date: string }
 type DashboardData = {
@@ -125,7 +127,7 @@ function DashboardContent({ role, data, onRefresh }: { role: PortalRole; data: D
 
       <section className="metric-grid" aria-label={isAdmin ? 'Administration metrics' : 'Portfolio metrics'}>{metrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</section>
 
-      {isAdmin ? <AdminApplicationReview /> : <InvestorApplicationStatus />}
+      {isAdmin ? <><AdminApplicationReview /><AdminProviderWorkflows /></> : <><InvestorApplicationStatus /><InvestorProviderWorkflow /></>}
 
       <div className="dashboard-panels">
         <ActivityPanel isAdmin={isAdmin} items={items ?? []} />
