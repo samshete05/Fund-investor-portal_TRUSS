@@ -37,6 +37,82 @@ export async function listAdminApplications() {
   return result.rows
 }
 
+export async function getAdminDashboard() {
+  const [counts, applications] = await Promise.all([
+    database().query(
+      `SELECT
+        (SELECT COUNT(*)::int FROM investor_applications) AS total_investors,
+        (SELECT COUNT(DISTINCT fund_name)::int FROM fund_positions) AS active_funds,
+        (SELECT COUNT(*)::int FROM investor_applications WHERE status='pending') AS pending_reviews`,
+    ),
+    database().query(
+      `SELECT first_name,last_name,status,created_at FROM investor_applications ORDER BY created_at DESC LIMIT 4`,
+    ),
+  ])
+  return {
+    ...counts.rows[0],
+    recent_activity: applications.rows.map((application) => ({
+      title: `${application.first_name} ${application.last_name}`,
+      detail: `Investor application · ${application.status}`,
+      date: new Date(application.created_at).toLocaleDateString('en-US'),
+    })),
+  }
+}
+
+export async function getInvestorNav(clerkUserId) {
+  const result = await database().query(
+    `SELECT p.fund_name, p.units::text AS units, v.nav_per_unit::text AS nav_per_unit,
+       (p.units * v.nav_per_unit)::text AS market_value, v.valuation_as_of, v.source
+     FROM fund_positions p
+     LEFT JOIN LATERAL (
+       SELECT nav_per_unit, valuation_as_of, source FROM fund_nav_valuations
+       WHERE fund_name=p.fund_name AND status='approved'
+       ORDER BY valuation_as_of DESC, id DESC LIMIT 1
+     ) v ON TRUE
+     WHERE p.clerk_user_id=$1 ORDER BY p.fund_name`, [clerkUserId],
+  )
+  const history = await database().query(
+    `SELECT v.id, v.fund_name, v.nav_per_unit::text, v.valuation_as_of, v.source, v.status,
+       v.submitted_by, v.reviewed_by, v.review_note, v.reviewed_at, v.created_at,
+       v.source_data, COALESCE(jsonb_agg(jsonb_build_object('event', a.event_type, 'actor', a.actor_clerk_user_id, 'details', a.details, 'at', a.created_at) ORDER BY a.created_at) FILTER (WHERE a.id IS NOT NULL), '[]'::jsonb) AS audit
+     FROM fund_nav_valuations v LEFT JOIN fund_nav_audit a ON a.valuation_id=v.id
+     WHERE v.fund_name IN (SELECT fund_name FROM fund_positions WHERE clerk_user_id=$1)
+     GROUP BY v.id ORDER BY v.valuation_as_of DESC LIMIT 50`, [clerkUserId],
+  )
+  return { positions: result.rows, history: history.rows }
+}
+
+export async function submitFundNav({ fundName, navPerUnit, valuationAsOf, source, sourceData, actor }) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const inserted = await client.query(
+      `INSERT INTO fund_nav_valuations (fund_name, nav_per_unit, valuation_as_of, source, source_data, submitted_by)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6) RETURNING *`,
+      [fundName, navPerUnit, valuationAsOf, source, JSON.stringify(sourceData), actor],
+    )
+    const valuation = inserted.rows[0]
+    await client.query(`INSERT INTO fund_nav_audit (valuation_id,event_type,actor_clerk_user_id,details) VALUES ($1,'submitted',$2,$3::jsonb)`, [valuation.id, actor, JSON.stringify({ source, sourceData })])
+    await client.query('COMMIT')
+    return valuation
+  } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+}
+
+export async function reviewFundNav(id, status, actor, note) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `UPDATE fund_nav_valuations SET status=$2, reviewed_by=$3, review_note=$4, reviewed_at=NOW()
+       WHERE id=$1 AND status='pending' RETURNING *`, [id, status, actor, note],
+    )
+    if (!result.rowCount) { await client.query('ROLLBACK'); return null }
+    await client.query(`INSERT INTO fund_nav_audit (valuation_id,event_type,actor_clerk_user_id,details) VALUES ($1,$2,$3,$4::jsonb)`, [id, status, actor, JSON.stringify({ note })])
+    await client.query('COMMIT')
+    return result.rows[0]
+  } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+}
+
 export async function reviewInvestorApplication(id, status, note, reviewer) {
   const result = await database().query('SELECT portal.review_investor_application($1, $2, $3, $4) AS result', [id, status, note, reviewer])
   return result.rows[0].result

@@ -12,6 +12,7 @@ if (!pool) {
       ['001_investor_applications.sql', 'Investor application tables are ready.'],
       ['002_investor_workflow_functions.sql', 'Investor workflow functions are ready.'],
       ['003_provider_workflows.sql', 'Provider onboarding workflows are ready.'],
+      ['004_nav_valuation.sql', 'NAV valuation and audit tables are ready.'],
     ]
     for (const [filename, message] of migrations) {
       const migrationUrl = new URL(`../migrations/${filename}`, import.meta.url)

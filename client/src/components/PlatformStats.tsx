@@ -2,9 +2,9 @@ import { FiBriefcase, FiTrendingUp, FiUsers } from 'react-icons/fi'
 
 // Replace these demo values with an aggregate metrics endpoint when live platform data exists.
 const demoStats = [
-  { label: 'Portal accounts', value: '128', note: 'Sample investor accounts', icon: FiUsers },
-  { label: 'Companies represented', value: '06', note: 'Fictional demo companies', icon: FiBriefcase },
-  { label: 'Sample funds', value: '06', note: 'Illustrative portal content', icon: FiTrendingUp },
+  { label: 'Portal accounts', value: '04', note: 'Fictional test investors', icon: FiUsers },
+  { label: 'Companies represented', value: '04', note: 'Fictional demo companies', icon: FiBriefcase },
+  { label: 'Sample funds', value: '04', note: 'Illustrative portal content', icon: FiTrendingUp },
 ]
 
 export default function PlatformStats() {

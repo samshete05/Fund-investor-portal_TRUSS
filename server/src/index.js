@@ -4,9 +4,9 @@ import express from 'express'
 import { clerkClient, clerkMiddleware, getAuth, requireAuth } from '@clerk/express'
 import {
   addWorkflowAdminNote, createKycCase, ensureInvestorWorkflow, getApplicationForWorkflow, getInvestorApplication,
-  getInvestorWorkflow, getWorkflowForApplication, listAdminApplications, listAdminWorkflows,
+  getAdminDashboard, getInvestorNav, getInvestorWorkflow, getWorkflowForApplication, listAdminApplications, listAdminWorkflows,
   pool, processProviderWebhook, requireDatabase, reviewInvestorApplication, saveAgreementEnvelope,
-  submitInvestorApplication, withApplicationLock,
+  reviewFundNav, submitFundNav, submitInvestorApplication, withApplicationLock,
 } from './db.js'
 import { assertSupportedProviders, integrationEnvironment, kycProvider, esignProvider } from './integrations/config.js'
 import { createPersonaContinuationLink, createPersonaInquiry, parsePersonaWebhook, verifyPersonaWebhook } from './integrations/persona.js'
@@ -254,27 +254,82 @@ app.post('/api/webhooks/docusign', requireDatabase, async (req, res) => {
   return res.status(200).json({ received: true, duplicate: outcome.duplicate })
 })
 
-app.get('/api/investor/dashboard', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('investor'), (_req, res) => {
+app.get('/api/investor/dashboard', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('investor'), requireDatabase, async (req, res) => {
+  const nav = await getInvestorNav(req.clerkUser.id)
+  const total = nav.positions.reduce((sum, position) => sum + Number(position.market_value ?? 0), 0)
+  const updates = nav.positions.map((position) => ({
+    title: position.fund_name,
+    detail: position.market_value == null ? 'Awaiting first approved NAV' : `NAV ${Number(position.nav_per_unit).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} · value ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(position.market_value))}`,
+    date: position.valuation_as_of ? new Date(position.valuation_as_of).toLocaleDateString('en-US') : 'No approved valuation',
+  }))
   res.json({
-    portfolioValue: '$2,480,500',
-    annualReturn: '+12.8%',
-    activeFunds: 3,
-    updates: [
-      { title: 'Northstar Growth Fund', detail: 'Quarterly update available', date: 'Today' },
-      { title: 'Fund documents', detail: 'Your latest statements are ready', date: 'Oct 18' },
-    ],
+    portfolioValue: new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(total),
+    activeFunds: nav.positions.length,
+    updates,
+    valuations: nav.history,
+    valuationAsOf: nav.positions.reduce((latest, p) => !p.valuation_as_of || (latest && new Date(latest) > new Date(p.valuation_as_of)) ? latest : p.valuation_as_of, null),
   })
 })
 
-app.get('/api/admin/dashboard', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('admin'), (_req, res) => {
+app.get('/api/investor/nav', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('investor'), requireDatabase, async (req, res) => {
+  res.json(await getInvestorNav(req.clerkUser.id))
+})
+
+app.get('/api/admin/nav/valuations', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('admin'), requireDatabase, async (_req, res) => {
+  const result = await pool.query(`SELECT id, fund_name, nav_per_unit::text, valuation_as_of, source, source_data, submitted_by, created_at FROM fund_nav_valuations WHERE status='pending' ORDER BY valuation_as_of DESC`)
+  res.json({ valuations: result.rows })
+})
+
+app.post('/api/admin/nav/valuations', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('admin'), requireDatabase, async (req, res) => {
+  const fundName = text(req.body?.fundName, 160)
+  const source = text(req.body?.source, 160)
+  const navPerUnit = req.body?.navPerUnit
+  const valuationAsOf = req.body?.valuationAsOf
+  if (!fundName || !source || typeof navPerUnit !== 'number' || !Number.isFinite(navPerUnit) || navPerUnit <= 0 || !valuationAsOf || !Number.isFinite(Date.parse(valuationAsOf)) || Date.parse(valuationAsOf) > Date.now()) {
+    return res.status(400).json({ message: 'Provide a fund, positive NAV per unit, valid past valuation time, and price source.' })
+  }
+  const sourceData = req.body?.sourceData && typeof req.body.sourceData === 'object' && !Array.isArray(req.body.sourceData) ? req.body.sourceData : {}
+  const valuation = await submitFundNav({ fundName, navPerUnit, valuationAsOf, source, sourceData, actor: req.clerkUser.id })
+  return res.status(201).json({ valuation })
+})
+
+app.patch('/api/admin/nav/valuations/:id/review', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('admin'), requireDatabase, async (req, res) => {
+  const id = Number(req.params.id)
+  const status = req.body?.status
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 1000) : ''
+  if (!Number.isSafeInteger(id) || id < 1 || !['approved', 'rejected'].includes(status) || (status === 'rejected' && !note)) return res.status(400).json({ message: 'Choose an existing valuation and approve it or reject it with a note.' })
+  const valuation = await reviewFundNav(id, status, req.clerkUser.id, note)
+  if (!valuation) return res.status(409).json({ message: 'Valuation was already reviewed or does not exist.' })
+  return res.json({ valuation })
+})
+
+app.put('/api/admin/nav/positions', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('admin'), requireDatabase, async (req, res) => {
+  const clerkUserId = text(req.body?.clerkUserId, 160)
+  const fundName = text(req.body?.fundName, 160)
+  const units = req.body?.units
+  if (!clerkUserId || !fundName || typeof units !== 'number' || !Number.isFinite(units) || units <= 0) return res.status(400).json({ message: 'Provide the investor Clerk user ID, fund name, and positive unit balance.' })
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const saved = await client.query(
+      `INSERT INTO fund_positions (clerk_user_id,fund_name,units) VALUES ($1,$2,$3)
+       ON CONFLICT (clerk_user_id,fund_name) DO UPDATE SET units=EXCLUDED.units RETURNING id, units`, [clerkUserId, fundName, units],
+    )
+    const position = saved.rows[0]
+    const previous = await client.query(`SELECT units FROM fund_position_audit WHERE position_id=$1 ORDER BY id DESC LIMIT 1`, [position.id])
+    await client.query(`INSERT INTO fund_position_audit (position_id,actor_clerk_user_id,previous_units,new_units) VALUES ($1,$2,$3,$4)`, [position.id, req.clerkUser.id, previous.rows[0]?.units ?? null, position.units])
+    await client.query('COMMIT')
+  } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() }
+  return res.json({ assigned: true })
+})
+
+app.get('/api/admin/dashboard', requireClerkConfiguration, requireAuth(), loadClerkUser, requireRole('admin'), requireDatabase, async (_req, res) => {
+  const dashboard = await getAdminDashboard()
   res.json({
-    totalInvestors: 128,
-    activeFunds: 6,
-    pendingReviews: 4,
-    recentActivity: [
-      { title: 'Investor onboarding', detail: 'New investor account requires review', date: 'Today' },
-      { title: 'Quarterly reporting', detail: 'Two fund updates are ready to publish', date: 'Yesterday' },
-    ],
+    totalInvestors: dashboard.total_investors,
+    activeFunds: dashboard.active_funds,
+    pendingReviews: dashboard.pending_reviews,
+    recentActivity: dashboard.recent_activity,
   })
 })
 

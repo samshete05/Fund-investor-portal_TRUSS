@@ -9,13 +9,15 @@ import '../dashboard.css'
 import AdminApplicationReview from './AdminApplicationReview'
 import InvestorApplicationStatus from './InvestorApplicationStatus'
 import AdminProviderWorkflows from './AdminProviderWorkflows'
+import AdminNavControl from './AdminNavControl'
 import InvestorProviderWorkflow from './InvestorProviderWorkflow'
 type PortalRole = 'investor' | 'admin'
 type ActivityItem = { title: string; detail: string; date: string }
 type DashboardData = {
   portfolioValue?: string
-  annualReturn?: string
   activeFunds?: number
+  valuationAsOf?: string | null
+  valuations?: Array<{ id: number; fund_name: string; nav_per_unit: string; valuation_as_of: string; source: string; status: string; submitted_by: string; reviewed_by: string | null; review_note: string | null; reviewed_at: string | null; source_data: Record<string, unknown>; audit: Array<{ event: string; actor: string; at: string; details: Record<string, unknown> }> }>
   totalInvestors?: number
   pendingReviews?: number
   updates?: ActivityItem[]
@@ -64,6 +66,11 @@ export default function PortalDashboard() {
     void loadDashboard()
   }, [loadDashboard, reloadKey])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setReloadKey((key) => key + 1), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   function refreshDashboard() {
     setError('')
     setLoading(true)
@@ -103,14 +110,14 @@ function DashboardContent({ role, data, onRefresh }: { role: PortalRole; data: D
   const items = isAdmin ? data.recentActivity : data.updates
   const metrics: Metric[] = isAdmin
     ? [
-      { label: 'Total investors', value: data.totalInvestors ?? 0, note: 'Accounts in this demo', icon: FiUsers, tone: 'blue' },
-      { label: 'Active funds', value: data.activeFunds ?? 0, note: 'Funds in this demo', icon: FiBriefcase, tone: 'green' },
-      { label: 'Pending reviews', value: data.pendingReviews ?? 0, note: 'Sample queue items', icon: FiClock, tone: 'amber', movement: 'down' },
+      { label: 'Total investors', value: data.totalInvestors ?? 0, note: 'Investor records', icon: FiUsers, tone: 'blue' },
+      { label: 'Active funds', value: data.activeFunds ?? 0, note: 'Funds with positions', icon: FiBriefcase, tone: 'green' },
+      { label: 'Pending reviews', value: data.pendingReviews ?? 0, note: 'Applications to review', icon: FiClock, tone: 'amber', movement: 'down' },
     ]
     : [
-      { label: 'Portfolio value', value: data.portfolioValue ?? 'â€”', note: 'Sample portfolio value', icon: FiDollarSign, tone: 'green' },
-      { label: 'Annual return', value: data.annualReturn ?? 'â€”', note: 'Sample performance figure', icon: FiTrendingUp, tone: 'blue', movement: 'up' },
-      { label: 'Active funds', value: data.activeFunds ?? 0, note: 'Funds in this demo', icon: FiBriefcase, tone: 'violet' },
+      { label: 'Portfolio value', value: data.portfolioValue ?? '$0.00', note: 'Based on approved NAVs', icon: FiDollarSign, tone: 'green' },
+      { label: 'NAV updated', value: data.valuationAsOf ? new Date(data.valuationAsOf).toLocaleDateString() : 'Pending', note: 'Latest approved valuation', icon: FiTrendingUp, tone: 'blue' },
+      { label: 'Invested funds', value: data.activeFunds ?? 0, note: 'Assigned to your account', icon: FiBriefcase, tone: 'violet' },
     ]
 
   return <div className="dashboard-layout">
@@ -127,7 +134,9 @@ function DashboardContent({ role, data, onRefresh }: { role: PortalRole; data: D
 
       <section className="metric-grid" aria-label={isAdmin ? 'Administration metrics' : 'Portfolio metrics'}>{metrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</section>
 
-      {isAdmin ? <><AdminApplicationReview /><AdminProviderWorkflows /></> : <><InvestorApplicationStatus /><InvestorProviderWorkflow /></>}
+      {!isAdmin && <NavAuditHistory valuations={data.valuations ?? []} />}
+
+      {isAdmin ? <><AdminApplicationReview /><AdminProviderWorkflows /><AdminNavControl /></> : <><InvestorApplicationStatus /><InvestorProviderWorkflow /></>}
 
       <div className="dashboard-panels">
         <ActivityPanel isAdmin={isAdmin} items={items ?? []} />
@@ -135,12 +144,18 @@ function DashboardContent({ role, data, onRefresh }: { role: PortalRole; data: D
           <span className="insight-icon">{isAdmin ? <FiFileText /> : <FiShield />}</span>
           <span className="dashboard-eyebrow">{isAdmin ? 'ADMIN WORKSPACE' : 'YOUR ACCOUNT'}</span>
           <h2>{isAdmin ? 'Review queue' : 'Private and secure'}</h2>
-          {isAdmin ? <><p>{data.pendingReviews ?? 0} sample items are currently awaiting review.</p><div className="insight-footnote"><FiCheckCircle /> Counts shown are fictional demo content.</div></> : <><p>Your account gives you access to fund updates and portfolio information assigned to you.</p><div className="insight-footnote"><FiShield /> Your access is managed securely.</div></>}
+          {isAdmin ? <><p>{data.pendingReviews ?? 0} investor applications are currently awaiting review.</p><div className="insight-footnote"><FiCheckCircle /> Counts reflect database records.</div></> : <><p>Your account gives you access to fund updates and portfolio information assigned to you.</p><div className="insight-footnote"><FiShield /> Your access is managed securely.</div></>}
         </aside>
       </div>
-      <p className="demo-disclaimer">Demo portal Â· All portfolio values, returns, activity, and account totals shown here are fictional sample data.</p>
+      <p className="demo-disclaimer">Portfolio values use assigned fund units and the latest approved NAV. NAVs remain estimates until reviewed under your fund’s valuation policy.</p>
     </main>
   </div>
+}
+
+function NavAuditHistory({ valuations }: { valuations: NonNullable<DashboardData['valuations']> }) {
+  return <section className="activity-panel nav-audit-panel"><div className="panel-heading"><div><span className="dashboard-eyebrow">VALUATION RECORD</span><h2>NAV history and audit trail</h2></div><span className="record-count">{valuations.length} records</span></div>
+    {!valuations.length ? <div className="empty-state"><strong>No valuation history yet</strong><p>Approved fund NAV updates will appear here with their source and review record.</p></div> : <div className="activity-table-wrap"><table className="activity-table"><thead><tr><th>Fund / as of</th><th>NAV / source</th><th>Status / reviewer</th><th>Audit</th></tr></thead><tbody>{valuations.map((item) => <tr key={item.id}><td><span className="table-title">{item.fund_name}</span><span className="nav-subline">{new Date(item.valuation_as_of).toLocaleString()}</span></td><td>{Number(item.nav_per_unit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}<span className="nav-subline">{item.source}</span></td><td><span className={`nav-status ${item.status}`}>{item.status}</span><span className="nav-subline">{item.reviewed_by ? `Reviewed by ${item.reviewed_by}` : `Submitted by ${item.submitted_by}`}</span>{item.review_note && <span className="nav-subline">{item.review_note}</span>}</td><td><details><summary>{item.audit.length} events</summary><ul>{item.audit.map((event, index) => <li key={`${item.id}-${index}`}>{event.event} · {new Date(event.at).toLocaleString()} · {event.actor}</li>)}</ul><pre>{JSON.stringify(item.source_data, null, 2)}</pre></details></td></tr>)}</tbody></table></div>}
+  </section>
 }
 
 function MetricCard({ metric }: { metric: Metric }) {

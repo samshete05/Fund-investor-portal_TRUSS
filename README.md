@@ -24,6 +24,10 @@ Investor signup submits a pending application to PostgreSQL. Investors can view 
 
 Set `DATABASE_URL` in `server/.env` to a PostgreSQL connection string, for example `postgresql://postgres:your_password@localhost:5432/fund_portal`. In `server/`, run `npm run db:migrate`. The command applies the SQL migrations in order. You can also run `server/sql/pgadmin_setup.sql` in pgAdmin against the same database. The app's PostgreSQL user must have permission to use the `portal` schema and its functions.
 
+## Fictional test records
+
+After applying migrations, add `DEMO_INVESTOR_CLERK_USER_ID` to `server/.env` with the Clerk user ID of your test investor. Temporarily add `SEED_DEMO_DATA=true` to that file, then run `npm run db:seed-demo` from `server/`. Remove `SEED_DEMO_DATA` after seeding. The seed command refuses to run when `NODE_ENV=production`. It creates four fictional investor applications with pending, approved, and rejected states; four provider workflow examples; and four fictional funds with NAV values assigned to the selected test investor. Names and email addresses use the reserved `.test` domain. Re-running the command does not duplicate the seed records.
+
 Investor application data, review decisions, and notes are stored in PostgreSQL. Accreditation, financial, experience, and risk answers are self-reported; the portal does not perform KYC/AML checks or process investments or payments.
 
 ## Provider onboarding (sandbox by default)
