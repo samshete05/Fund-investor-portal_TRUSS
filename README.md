@@ -1,53 +1,439 @@
 # Fund Investor Portal
 
-React + Vite + TypeScript client with Tailwind CSS and an Express JavaScript API. Clerk handles sign-in on the client and verifies protected API requests.
+Fund Investor Portal is a full-stack investor onboarding and portfolio visibility application. It gives investors a secure place to submit an investor application, track review and onboarding progress, view assigned fund positions and approved NAV valuations, and complete provider-based verification and electronic signing. Administrators can review applications, manage onboarding workflows, assign fund positions, and submit or review NAV valuations.
+
+This repository contains a working sandbox/demo workflow. It does **not** make accreditation, KYC/AML, identity, sanctions, investment, securities, or payment decisions. Investor financial and accreditation information is self-reported, provider integrations are environment-dependent, and demo records are fictional.
+
+## Key features
+
+### Investor experience
+
+- Clerk sign-up and sign-in.
+- Server-authoritative investor/admin role detection.
+- Investor application form with contact, investment profile, accreditation, experience, risk, and privacy-notice fields.
+- Application status tracking: pending, approved, or rejected.
+- Re-application after a rejected application.
+- Provider onboarding status and audit history.
+- Persona KYC/identity verification launch and continuation links.
+- DocuSign agreement workflow after provider verification is approved.
+- Portfolio dashboard showing assigned funds, units, approved NAV per unit, market value, and valuation history.
+- Seller-interest capture that does not grant administrative access.
+
+### Administrator experience
+
+- Admin dashboard with investor, fund, and pending-review metrics.
+- Investor application review queue.
+- Approve or reject applications, with a required note for rejections.
+- Provider workflow monitoring and administrative audit notes.
+- NAV valuation submission and review.
+- Approve or reject pending valuations, with a required note for rejections.
+- Assign or update an investor's fund position and unit balance.
+- Audit trails for application reviews, provider workflow events, NAV valuations, and position changes.
+
+### Reliability and security controls
+
+- Clerk private metadata is the source of truth for authorization.
+- Every protected route checks authentication, role, and database availability.
+- Server-side validation for application, review, NAV, and position inputs.
+- Persona and DocuSign webhook signature validation.
+- Webhook retry deduplication by provider event ID.
+- Provider state-transition validation to prevent invalid or frontend-forged workflow jumps.
+- PostgreSQL transactions and locks for review, onboarding, and NAV operations.
+- Sandbox/production integration separation.
+- Provider credentials remain server-side and are never exposed to the client.
+
+## Technology stack
+
+### Frontend
+
+- React 19
+- TypeScript 6
+- Vite 6
+- Tailwind CSS 3
+- React Icons
+- Clerk React SDK
+- ESLint
+
+### Backend
+
+- Node.js 20.9+
+- Express 5
+- JavaScript using native ES modules
+- Clerk Express middleware
+- `pg` PostgreSQL client
+- CORS
+- Dotenv
+- Nodemon for development
+
+### Data and integrations
+
+- PostgreSQL
+- SQL migrations and PostgreSQL functions
+- Persona for KYC/identity workflow integration
+- DocuSign for electronic signing workflow integration
+- HMAC/signature verification for provider webhooks
+
+## Architecture
+
+```text
+                           +----------------------+
+                           |       Clerk          |
+                           | Authentication/Roles |
+                           +----------+-----------+
+                                      |
+                                      v
++------------------+       +---------+----------+       +------------------+
+| React + Vite     | HTTPS | Express API        | SQL   | PostgreSQL       |
+| TypeScript UI    +------>+ Auth, validation,   +------>+ Applications     |
+| Investor/Admin   |       | workflows, NAV     |       | Workflows, NAV   |
++------------------+       +----+-----------+----+       | Audit records    |
+                               |           |             +------------------+
+                               |           |
+                         +-----v----+ +----v-----+
+                         | Persona  | | DocuSign |
+                         | KYC      | | e-sign   |
+                         +----------+ +----------+
+```
+
+The browser calls the Express API with a Clerk bearer token. The API resolves the Clerk user, reads the trusted private metadata role, validates the request, and performs database operations. Provider webhooks enter through public webhook routes, are signature-checked, deduplicated, and applied only when the provider event represents a valid state transition.
+
+The frontend uses a single Vite application and renders either the public landing page or the authenticated investor/admin dashboard. The backend keeps database access in `server/src/db.js`, route and middleware composition in `server/src/index.js`, and external provider concerns in `server/src/integrations/`.
+
+## Project structure
+
+```text
+fund-investor-portal/
+├── README.md
+├── client/
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tsconfig*.json
+│   ├── public/
+│   └── src/
+│       ├── App.tsx
+│       ├── main.tsx
+│       ├── App.css
+│       ├── index.css
+│       ├── dashboard.css
+│       ├── assets/
+│       └── components/
+│           ├── AuthModal.tsx
+│           ├── Dashboard.tsx
+│           ├── InvestorApplicationStatus.tsx
+│           ├── InvestorProviderWorkflow.tsx
+│           ├── AdminApplicationReview.tsx
+│           ├── AdminProviderWorkflows.tsx
+│           ├── AdminNavControl.tsx
+│           ├── HomeGuide.tsx
+│           ├── PlatformStats.tsx
+│           ├── SiteHeader.tsx
+│           └── SiteFooter.tsx
+├── server/
+│   ├── package.json
+│   ├── .env.example
+│   ├── migrations/
+│   │   ├── 001_investor_applications.sql
+│   │   ├── 002_investor_workflow_functions.sql
+│   │   ├── 003_provider_workflows.sql
+│   │   └── 004_nav_valuation.sql
+│   ├── scripts/
+│   │   ├── migrate.js
+│   │   └── seed-demo-data.js
+│   ├── sql/
+│   │   └── pgadmin_setup.sql
+│   ├── src/
+│   │   ├── db.js
+│   │   ├── index.js
+│   │   └── integrations/
+│   │       ├── config.js
+│   │       ├── docusign.js
+│   │       ├── persona.js
+│   │       └── security.js
+│   └── test/
+│       └── integrations.test.js
+└── .gitignore
+```
 
 ## Requirements
 
-- Node.js 20.9 or newer (required by the current Clerk SDK; Vite 6 also supports older Node versions)
-- npm
-- A Clerk application with its publishable and secret keys
+- Node.js 20.9 or newer.
+- npm.
+- PostgreSQL 14+ recommended.
+- A Clerk application with a publishable key and server secret key.
+- Persona and DocuSign sandbox credentials for provider workflow testing.
 
-## Setup
+## Local setup
 
-1. Add your Clerk publishable key in `client/.env` and the matching publishable and secret keys in `server/.env`.
-2. Add a PostgreSQL connection string as `DATABASE_URL` in `server/.env` (see `server/.env.example`).
-3. In `server/`, run `npm install`, then `npm run db:migrate` to create the onboarding tables, provider workflow tables, and database functions. `DATABASE_URL` must point to your PostgreSQL database first.
-4. In `client/`, run `npm install` then `npm run dev`.
-5. In `server/`, run `npm run dev`.
+### 1. Configure Clerk
 
-The client starts at `http://localhost:5173` and API at `http://localhost:3000`. The API provides separate `/api/investor/dashboard` and `/api/admin/dashboard` endpoints. It reads each role from the Clerk user's **private metadata**, defaults missing roles to investor, and enforces the role again on the server for every protected request. Dashboard metrics are sample data until connected to your fund database.
+Create a Clerk application and add:
 
-Investor signup submits a pending application to PostgreSQL. Investors can view their status at `GET /api/investor/application`. Admins assigned through Clerk private metadata can view the review queue at `GET /api/admin/applications` and set a pending application to approved or rejected with `PATCH /api/admin/applications/:id/review`. Rejections require an admin note; every review decision is recorded in `investor_application_reviews`. Applicant financial and accreditation answers are self-reported and are not verified or used for automatic eligibility decisions. This workflow does not process investments, securities transactions, or payments.
+- `VITE_CLERK_PUBLISHABLE_KEY` to `client/.env`.
+- `CLERK_SECRET_KEY` to `server/.env`.
 
-## PostgreSQL setup
-
-Set `DATABASE_URL` in `server/.env` to a PostgreSQL connection string, for example `postgresql://postgres:your_password@localhost:5432/fund_portal`. In `server/`, run `npm run db:migrate`. The command applies the SQL migrations in order. You can also run `server/sql/pgadmin_setup.sql` in pgAdmin against the same database. The app's PostgreSQL user must have permission to use the `portal` schema and its functions.
-
-## Fictional test records
-
-After applying migrations, add `DEMO_INVESTOR_CLERK_USER_ID` to `server/.env` with the Clerk user ID of your test investor. Temporarily add `SEED_DEMO_DATA=true` to that file, then run `npm run db:seed-demo` from `server/`. Remove `SEED_DEMO_DATA` after seeding. The seed command refuses to run when `NODE_ENV=production`. It creates four fictional investor applications with pending, approved, and rejected states; four provider workflow examples; and four fictional funds with NAV values assigned to the selected test investor. Names and email addresses use the reserved `.test` domain. Re-running the command does not duplicate the seed records.
-
-Investor application data, review decisions, and notes are stored in PostgreSQL. Accreditation, financial, experience, and risk answers are self-reported; the portal does not perform KYC/AML checks or process investments or payments.
-
-## Provider onboarding (sandbox by default)
-
-The portal delegates institutional identity/compliance verification to Persona and electronic signature to DocuSign. The server creates provider cases and envelopes; provider-signed webhooks update the workflow. The portal stores provider case/envelope IDs, statuses, next actions, agreement version, timestamps, and audit events. It does not store identity documents or webhook payloads. Investor and admin status fields are read-only; only verified provider events can advance them. Server checks require the investor application to be approved before starting provider verification, and require provider approval before sending the agreement.
-
-Set the provider variables in `server/.env` using `server/.env.example`. `INTEGRATION_MODE` defaults to `sandbox`. Sandbox mode uses only `PERSONA_SANDBOX_*` credentials and requires a DocuSign demo account (`https://account-d.docusign.com`) and sandbox template. The UI labels this as sandbox and says it is not real verification or a production signature. Production mode requires separate Persona production credentials plus the production DocuSign OAuth host (`https://account.docusign.com`). Do not expose provider credentials to the client. Configure the provider webhook destinations to `POST /api/webhooks/persona` and `POST /api/webhooks/docusign`, with each provider's signing secret/HMAC key in the server environment. Webhook retries are deduplicated by provider event ID.
-
-Persona needs an organization-configured inquiry template and environment. DocuSign needs an organization-approved template, role name, and agreement version. This integration sends the configured template; it does not create legal agreement terms. Before production, the organization’s legal and compliance teams must approve provider choice, provider workflows, data retention, webhook configuration, and agreement language. Confirm provider account permissions, consent, template content, environment routing, and retention policy with those teams. No accreditation, identity, sanctions, or compliance decisions are implemented by this portal.
-
-Run provider security and state tests from `server/` with `npm test`. Apply all database migrations with `npm run db:migrate` after setting `DATABASE_URL`.
-
-## Assigning roles in Clerk
-
-In the Clerk Dashboard, open **Users**, select the user, and edit **Private metadata**:
+Set the user's role in Clerk **Private metadata**:
 
 ```json
 { "role": "investor" }
 ```
 
-For an administrator, set `{ "role": "admin" }`. Do not put role selection in the React app or in unsafe metadata. Only trusted administrators should change private metadata.
+or:
 
-Never put `CLERK_SECRET_KEY` in the client environment. `VITE_` variables are bundled into browser code. The local `.env` files are ignored by Git.
+```json
+{ "role": "admin" }
+```
+
+Roles must not be selected by the client. The API treats every non-`admin` role as `investor`.
+
+### 2. Install dependencies
+
+```powershell
+cd client
+npm install
+
+cd ..\server
+npm install
+```
+
+### 3. Configure the server
+
+Copy `server/.env.example` to `server/.env` and set at least:
+
+```dotenv
+PORT=3000
+CLIENT_URL=http://localhost:5173
+CLERK_SECRET_KEY=sk_test_your_key
+DATABASE_URL=postgresql://postgres:password@localhost:5432/fund_portal
+DATABASE_SSL=false
+INTEGRATION_MODE=sandbox
+```
+
+For provider workflows, also configure the Persona and DocuSign sandbox values in `server/.env`. Use the exact provider webhook secrets and approved sandbox templates supplied by those providers.
+
+### 4. Create and migrate the database
+
+Create an empty PostgreSQL database named `fund_portal`, then run:
+
+```powershell
+cd server
+npm run db:migrate
+```
+
+The migration runner applies, in order:
+
+1. Investor application tables and review history.
+2. PostgreSQL functions used by the application workflow.
+3. Provider onboarding workflow, webhook, and audit tables.
+4. Fund positions, NAV valuation, and NAV audit tables.
+
+The same SQL can be run from `server/sql/pgadmin_setup.sql` in pgAdmin when a GUI setup is preferred. The database user must be able to create/use the required tables, indexes, functions, and schema objects.
+
+### 5. Start the application
+
+Run the API in one terminal:
+
+```powershell
+cd server
+npm run dev
+```
+
+Run the client in another terminal:
+
+```powershell
+cd client
+npm run dev
+```
+
+Open <http://localhost:5173>. The API listens on <http://localhost:3000>.
+
+For a production-style local start:
+
+```powershell
+cd client
+npm run build
+
+cd ..\server
+npm start
+```
+
+Set `VITE_API_URL` in `client/.env` when the API is not running at `http://localhost:3000`.
+
+## Database setup and demo data
+
+### Main tables
+
+- `investor_applications`: investor profile, application status, and review information.
+- `investor_application_reviews`: immutable application review history.
+- `investor_provider_workflows`: Persona and DocuSign identifiers, statuses, environments, timestamps, and next actions.
+- `provider_webhook_events`: provider event IDs used for webhook deduplication.
+- `investor_workflow_audit`: provider and administrator workflow audit events.
+- `fund_positions`: fund/unit balances assigned to Clerk users.
+- `fund_position_audit`: position change history.
+- `fund_nav_valuations`: submitted, approved, or rejected NAV valuations.
+- `fund_nav_audit`: NAV submission and review history.
+
+### Seed fictional records
+
+After migrations, set the Clerk ID of a test investor and temporarily enable seeding:
+
+```dotenv
+DEMO_INVESTOR_CLERK_USER_ID=user_test_investor_id
+SEED_DEMO_DATA=true
+```
+
+Then run:
+
+```powershell
+cd server
+npm run db:seed-demo
+```
+
+The seed script creates or refreshes fictional application, provider workflow, fund position, and approved NAV records. It is disabled when `NODE_ENV=production`, requires explicit `SEED_DEMO_DATA=true`, and uses reserved `.test` email addresses. Remove `SEED_DEMO_DATA` after seeding.
+
+## Backend API endpoints
+
+Protected routes require a Clerk bearer token:
+
+```http
+Authorization: Bearer <clerk-session-token>
+```
+
+### Public endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/` | API status and Clerk configuration status |
+| `GET` | `/api/health` | Health check |
+| `POST` | `/api/webhooks/persona` | Receive signed Persona workflow events |
+| `POST` | `/api/webhooks/docusign` | Receive signed DocuSign Connect events |
+
+Webhook routes do not use Clerk authentication. They require valid provider signatures and configured database access.
+
+### Shared authenticated endpoints
+
+| Method | Endpoint | Role | Purpose |
+|---|---|---|---|
+| `GET` | `/api/me` | Investor/Admin | Return the authenticated user ID, resolved role, and display-only application intent |
+
+### Investor endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/investor/application` | Submit a new application or resubmit a rejected application |
+| `GET` | `/api/investor/application` | Get the current investor application |
+| `GET` | `/api/investor/workflow` | Get provider onboarding status and audit history |
+| `POST` | `/api/investor/workflow/kyc/start` | Create or continue a Persona verification case |
+| `POST` | `/api/investor/workflow/agreement/send` | Create a DocuSign envelope after KYC approval |
+| `GET` | `/api/investor/dashboard` | Get portfolio summary and approved NAV-based updates |
+| `GET` | `/api/investor/nav` | Get positions and NAV valuation history |
+
+### Administrator endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/admin/dashboard` | Get investor, fund, pending-review, and recent-activity metrics |
+| `GET` | `/api/admin/applications` | List investor applications |
+| `PATCH` | `/api/admin/applications/:id/review` | Approve or reject a pending application |
+| `GET` | `/api/admin/workflows` | List provider onboarding workflows |
+| `POST` | `/api/admin/workflows/:applicationId/notes` | Add an audit note to a workflow |
+| `GET` | `/api/admin/nav/valuations` | List pending NAV valuations |
+| `POST` | `/api/admin/nav/valuations` | Submit a NAV valuation |
+| `PATCH` | `/api/admin/nav/valuations/:id/review` | Approve or reject a pending NAV valuation |
+| `PUT` | `/api/admin/nav/positions` | Assign or update an investor's fund units |
+
+### Important request rules
+
+- Applications require a verified primary Clerk email, required contact fields, accepted privacy notice, and valid enumerated investor answers.
+- Rejected applications require a non-empty admin note when reviewed.
+- A KYC workflow can start only after the investor application is approved.
+- An agreement can be sent only after KYC is approved and the investor has a verified primary email.
+- NAV per unit and position units must be positive finite numbers.
+- NAV valuation dates must be valid and not in the future.
+- Rejected NAV valuations require a review note.
+- Provider webhook events must pass signature verification and valid state-transition checks.
+
+## Testing and quality checks
+
+### Current test setup
+
+The server uses the built-in Node.js test runner and currently covers the security-critical integration logic:
+
+- Admin role recognition.
+- Persona HMAC signature validation, timestamps, and rotated signatures.
+- DocuSign base64 HMAC signature validation and rotated signature headers.
+- Webhook event deduplication.
+- KYC and agreement state-transition rules.
+
+Run the existing tests with:
+
+```powershell
+cd server
+npm test
+```
+
+Run the client checks with:
+
+```powershell
+cd client
+npm run lint
+npm run build
+```
+
+### Recommended testing strategy
+
+The best fit for this application is a layered test strategy:
+
+1. **Unit tests** with Node's `node:test` for server validation, authorization, signature verification, state transitions, and database helper behavior.
+2. **API integration tests** using a disposable PostgreSQL database to verify migrations, SQL functions, role enforcement, application review, NAV review, workflow locking, and webhook processing.
+3. **React component tests** using Vitest and React Testing Library for loading/error states, role-specific dashboards, forms, validation messages, and refresh behavior.
+4. **End-to-end tests** using Playwright for the critical investor and admin journeys:
+   - Sign in and resolve a role.
+   - Submit an investor application.
+   - Review the application as an admin.
+   - Start provider onboarding.
+   - Submit, approve, and display a NAV valuation.
+   - Display an investor's portfolio value.
+5. **Contract tests** for Persona and DocuSign webhook payload parsing and signature headers using recorded, non-sensitive fixtures.
+6. **Static checks** on every change with TypeScript build, ESLint, and the server test suite.
+
+Provider calls should be mocked in automated tests. Real Persona, DocuSign, and Clerk sandbox smoke tests should run separately because they require external credentials and provider state.
+
+## Provider integration and production notes
+
+The default `INTEGRATION_MODE=sandbox` setting uses Persona sandbox credentials and a DocuSign demo account. Configure webhook destinations as:
+
+```text
+POST /api/webhooks/persona
+POST /api/webhooks/docusign
+```
+
+Before production use, the organization must approve provider choice, templates, agreement language, consent, data retention, webhook configuration, account permissions, and compliance responsibilities. Use separate production credentials and the production DocuSign OAuth host. Never expose `CLERK_SECRET_KEY`, provider API keys, private signing keys, or webhook secrets in the client or source control.
+
+## Available scripts
+
+### Client
+
+| Command | Description |
+|---|---|
+| `npm run dev` | Start the Vite development server |
+| `npm run build` | Type-check and create a production client build |
+| `npm run lint` | Run ESLint |
+| `npm run preview` | Preview the production client build |
+
+### Server
+
+| Command | Description |
+|---|---|
+| `npm run dev` | Start the API with Nodemon |
+| `npm start` | Start the API with Node |
+| `npm run db:migrate` | Apply all PostgreSQL migrations |
+| `npm run db:seed-demo` | Seed fictional non-production records |
+| `npm test` | Run Node integration/security tests |
+
+## Scope and limitations
+
+- This is an onboarding and portfolio-information portal, not an investment execution platform.
+- It does not process investments, securities transactions, money movement, or payments.
+- It does not independently verify accreditation, identity, sanctions, financial information, or compliance eligibility.
+- The dashboard displays only positions and NAV valuations stored in the application database.
+- NAV data is operational input and requires an administrator review before it appears as an approved investor valuation.
