@@ -42,7 +42,11 @@ export default function InvestorProviderWorkflow() {
     finally { setLoading(false) }
   }, [getToken])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    // This starts an async fetch; state updates happen after the network response.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load()
+  }, [load])
 
   async function start(path: string, key: string) {
     setBusy(key); setError(''); setNotice(''); setActionUrl('')

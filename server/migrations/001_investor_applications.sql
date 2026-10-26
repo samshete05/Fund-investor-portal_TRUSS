@@ -19,8 +19,11 @@ CREATE TABLE IF NOT EXISTS investor_applications (
   liquid_worth_range TEXT NOT NULL,
   privacy_notice_accepted BOOLEAN NOT NULL DEFAULT FALSE,
   privacy_notice_accepted_at TIMESTAMPTZ,
+
+  -- all about the admin review process to store in db
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
   admin_note TEXT,
+
   reviewed_by_clerk_user_id TEXT,
   reviewed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
