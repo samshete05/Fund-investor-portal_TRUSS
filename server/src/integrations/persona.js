@@ -24,7 +24,17 @@ async function personaRequest(path, options = {}) {
     },
   })
   const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(`Persona request failed (${response.status}).`)
+  if (!response.ok) {
+    const detail = body?.errors?.map((error) => error.detail || error.details || error.title).filter(Boolean).join('; ')
+      || body?.error?.message
+      || body?.message
+      || 'Persona rejected the request.'
+    const error = new Error(`Persona request failed (${response.status}): ${detail}`)
+    error.status = 502
+    error.providerStatus = response.status
+    error.providerDetail = detail
+    throw error
+  }
   const responseEnvironment = response.headers.get('persona-environment-id')
   if (responseEnvironment !== environmentId) throw new Error('Persona environment does not match the configured integration mode.')
   return body
@@ -32,11 +42,18 @@ async function personaRequest(path, options = {}) {
 
 export async function createPersonaInquiry(applicationId) {
   const { templateId } = config()
-  const body = await personaRequest('/inquiries', {
+  const request = (idempotencyKey) => personaRequest('/inquiries', {
     method: 'POST',
-    headers: { 'Idempotency-Key': `fundly-investor-${applicationId}` },
+    headers: { 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify({ data: { attributes: { 'inquiry-template-id': templateId, 'reference-id': `application-${applicationId}` } } }),
   })
+  let body
+  try {
+    body = await request(`fundly-investor-${applicationId}`)
+  } catch (error) {
+    if (error?.providerStatus !== 400 || error?.providerDetail !== 'Inquiry template is not deployed to this environment') throw error
+    body = await request(`fundly-investor-${applicationId}-${Date.now()}`)
+  }
   const inquiryId = body.data?.id
   if (!inquiryId) throw new Error('Persona did not return an inquiry ID.')
   const actionUrl = body.meta?.['one-time-link'] ?? body.meta?.['one-time-link-short'] ?? null

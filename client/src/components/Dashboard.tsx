@@ -11,7 +11,8 @@ import InvestorApplicationStatus from './InvestorApplicationStatus'
 import AdminProviderWorkflows from './AdminProviderWorkflows'
 import AdminNavControl from './AdminNavControl'
 import InvestorProviderWorkflow from './InvestorProviderWorkflow'
-type PortalRole = 'investor' | 'admin'
+import MarketplaceWorkspace from './MarketplaceWorkspace'
+type PortalRole = 'investor' | 'seller' | 'company_reviewer' | 'admin'
 type ActivityItem = { title: string; detail: string; date: string }
 type DashboardData = {
   portfolioValue?: string
@@ -19,9 +20,19 @@ type DashboardData = {
   valuationAsOf?: string | null
   valuations?: Array<{ id: number; fund_name: string; nav_per_unit: string; valuation_as_of: string; source: string; status: string; submitted_by: string; reviewed_by: string | null; review_note: string | null; reviewed_at: string | null; source_data: Record<string, unknown>; audit: Array<{ event: string; actor: string; at: string; details: Record<string, unknown> }> }>
   totalInvestors?: number
+  pendingInvestors?: number
+  approvedInvestors?: number
+  rejectedInvestors?: number
+  totalCompanies?: number
+  pendingCompanies?: number
+  approvedCompanies?: number
+  rejectedCompanies?: number
+  publishedOfferings?: number
+  activeInterestRequests?: number
   pendingReviews?: number
   updates?: ActivityItem[]
   recentActivity?: ActivityItem[]
+  acceptedInterests?: Array<{ id: number; intended_amount: string; offering_name: string; legal_name: string; decision_note: string | null; decided_at: string | null }>
 }
 type Metric = { label: string; value: string | number; note: string; icon: typeof FiDollarSign; tone: string; movement?: 'up' | 'down' }
 
@@ -42,10 +53,15 @@ export default function PortalDashboard() {
       const headers = { Authorization: `Bearer ${token}` }
       const profileResponse = await fetch(`${apiUrl}/api/me`, { headers })
       const profile: { role?: PortalRole; applicationIntent?: 'sell' | null; message?: string } = await profileResponse.json()
-      if (!profileResponse.ok || (profile.role !== 'investor' && profile.role !== 'admin')) {
+      if (!profileResponse.ok || (profile.role !== 'investor' && profile.role !== 'seller' && profile.role !== 'company_reviewer' && profile.role !== 'admin')) {
         throw new Error(profile.message ?? 'We could not confirm your account role.')
       }
 
+      if (profile.role === 'seller' || profile.role === 'company_reviewer') {
+        setRole(profile.role)
+        setDashboard({})
+        return
+      }
       setSellerRequest(profile.role !== 'admin' && profile.applicationIntent === 'sell')
       const dashboardResponse = await fetch(`${apiUrl}/api/${profile.role}/dashboard`, { headers })
       const dashboardData: DashboardData & { message?: string } = await dashboardResponse.json()
@@ -106,13 +122,21 @@ function DashboardError({ message, onRetry }: { message: string; onRetry: () => 
 }
 
 function DashboardContent({ role, data, onRefresh }: { role: PortalRole; data: DashboardData; onRefresh: () => void }) {
+  if (role === 'seller' || role === 'company_reviewer') return <div className="dashboard-layout"><aside className="dashboard-sidebar"><div className="sidebar-label">WORKSPACE</div><div className="sidebar-link is-active"><FiBriefcase /> {role === 'seller' ? 'Seller workspace' : 'Company review'}</div><div className="sidebar-security"><FiShield /><span><strong>Secure portal</strong><small>Your account is protected</small></span></div></aside><main className="dashboard-main"><div className="dashboard-toolbar"><span className="toolbar-kicker">{role === 'seller' ? 'SELLER OPERATIONS' : 'COMPANY REVIEW'}</span></div><div className="dashboard-title-block"><span className="dashboard-eyebrow">{role === 'seller' ? 'COMPANY SUBMISSIONS' : 'AUTHORIZED COMPANY QUEUE'}</span><h1>{role === 'seller' ? 'Build and review your company drafts' : 'Review assigned investor requests'}</h1><p>{role === 'seller' ? 'Seller submissions remain unreviewed until a platform administrator completes the platform review.' : 'Your queue is limited to companies explicitly assigned to your Clerk account.'}</p></div><MarketplaceWorkspace role={role === 'seller' ? 'seller' : 'reviewer'} /></main></div>
   const isAdmin = role === 'admin'
   const items = isAdmin ? data.recentActivity : data.updates
   const metrics: Metric[] = isAdmin
     ? [
       { label: 'Total investors', value: data.totalInvestors ?? 0, note: 'Investor records', icon: FiUsers, tone: 'blue' },
+      { label: 'Pending investors', value: data.pendingInvestors ?? 0, note: 'Awaiting approval', icon: FiClock, tone: 'amber' },
+      { label: 'Approved investors', value: data.approvedInvestors ?? 0, note: 'Can access offerings', icon: FiCheckCircle, tone: 'green' },
+      { label: 'Rejected investors', value: data.rejectedInvestors ?? 0, note: 'Not eligible currently', icon: FiAlertCircle, tone: 'red' },
+      { label: 'Total companies', value: data.totalCompanies ?? 0, note: 'Seller records', icon: FiBriefcase, tone: 'violet' },
+      { label: 'Pending companies', value: data.pendingCompanies ?? 0, note: 'Awaiting admin review', icon: FiClock, tone: 'amber' },
+      { label: 'Approved companies', value: data.approvedCompanies ?? 0, note: 'Visible to investors', icon: FiCheckCircle, tone: 'green' },
+      { label: 'Published offerings', value: data.publishedOfferings ?? 0, note: 'Visible investment options', icon: FiTrendingUp, tone: 'blue' },
       { label: 'Active funds', value: data.activeFunds ?? 0, note: 'Funds with positions', icon: FiBriefcase, tone: 'green' },
-      { label: 'Pending reviews', value: data.pendingReviews ?? 0, note: 'Applications to review', icon: FiClock, tone: 'amber', movement: 'down' },
+      { label: 'Interest requests', value: data.activeInterestRequests ?? 0, note: 'Investor-company requests', icon: FiUsers, tone: 'blue' },
     ]
     : [
       { label: 'Portfolio value', value: data.portfolioValue ?? '$0.00', note: 'Based on approved NAVs', icon: FiDollarSign, tone: 'green' },
@@ -128,15 +152,16 @@ function DashboardContent({ role, data, onRefresh }: { role: PortalRole; data: D
       <div className="sidebar-security"><FiShield /><span><strong>Secure portal</strong><small>Your account is protected</small></span></div>
     </aside>
 
-    <main className="dashboard-main">
+    <main className={`dashboard-main ${isAdmin ? 'admin-dashboard-main' : ''}`}>
       <div className="dashboard-toolbar"><div className="breadcrumb"><span>Workspace</span><FiArrowRight /><strong>Overview</strong></div><button className="action-button secondary-action" onClick={onRefresh}><FiRefreshCw /> Refresh</button></div>
-      <div className="dashboard-title-block"><div><span className="dashboard-eyebrow">{isAdmin ? 'FUND OPERATIONS' : 'INVESTOR PORTAL'}</span><span className={`role-chip ${isAdmin ? 'role-chip-admin' : ''}`}>{isAdmin ? 'Admin' : 'Investor'}</span></div><h1>{isAdmin ? 'Operations overview' : 'Your portfolio at a glance'}</h1><p>{isAdmin ? 'A clear snapshot of fund activity and investor accounts.' : 'Your latest fund information, in one place.'}</p></div>
+      <div className="dashboard-title-block"><div><span className="dashboard-eyebrow">{isAdmin ? 'FUND OPERATIONS' : 'INVESTOR PORTAL'}</span><span className={`role-chip ${isAdmin ? 'role-chip-admin' : ''}`}>{isAdmin ? 'Admin' : 'Investor'}</span></div><h1>{isAdmin ? 'Operations overview' : 'Your portfolio at a glance'}</h1><p>{isAdmin ? 'Manage investor onboarding, marketplace approvals, and fund operations from one workspace.' : 'Your latest fund information, in one place.'}</p>{isAdmin && <div className="admin-workspace-note"><FiShield /><span><strong>Administrator workspace</strong><small>Review actions are recorded and scoped to the selected record.</small></span></div>}</div>
 
       <section className="metric-grid" aria-label={isAdmin ? 'Administration metrics' : 'Portfolio metrics'}>{metrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</section>
 
+      {!isAdmin && <AcceptedFunding interests={data.acceptedInterests ?? []} />}
       {!isAdmin && <NavAuditHistory valuations={data.valuations ?? []} />}
 
-      {isAdmin ? <><AdminApplicationReview /><AdminProviderWorkflows /><AdminNavControl /></> : <><InvestorApplicationStatus /><InvestorProviderWorkflow /></>}
+      {isAdmin ? <div className="admin-sections"><section className="admin-section"><div className="admin-section-heading"><span className="section-icon section-icon-blue"><FiUsers /></span><div><span className="dashboard-eyebrow">ONBOARDING</span><h2>Investor applications</h2><p>Review and decide who can access the investor workspace.</p></div></div><AdminApplicationReview /></section><section className="admin-section"><div className="admin-section-heading"><span className="section-icon section-icon-purple"><FiShield /></span><div><span className="dashboard-eyebrow">MARKETPLACE</span><h2>Company and offering approvals</h2><p>Review seller submissions and send company-specific feedback.</p></div></div><MarketplaceWorkspace role="admin" /></section><section className="admin-section"><div className="admin-section-heading"><span className="section-icon section-icon-green"><FiActivity /></span><div><span className="dashboard-eyebrow">OPERATIONS</span><h2>Provider and fund controls</h2><p>Monitor onboarding workflows and approved valuation records.</p></div></div><AdminProviderWorkflows /><AdminNavControl /></section></div> : <><InvestorApplicationStatus /><InvestorProviderWorkflow /><MarketplaceWorkspace role="investor" /></>}
 
       <div className="dashboard-panels">
         <ActivityPanel isAdmin={isAdmin} items={items ?? []} />
@@ -150,6 +175,13 @@ function DashboardContent({ role, data, onRefresh }: { role: PortalRole; data: D
       <p className="demo-disclaimer">Portfolio values use assigned fund units and the latest approved NAV. NAVs remain estimates until reviewed under your fund’s valuation policy.</p>
     </main>
   </div>
+}
+
+function AcceptedFunding({ interests }: { interests: NonNullable<DashboardData['acceptedInterests']> }) {
+  return <section className="activity-panel mb-6">
+    <div className="panel-heading"><div><span className="dashboard-eyebrow">COMPANY DECISIONS</span><h2>Accepted funding requests</h2></div><span className="record-count">{interests.length} accepted</span></div>
+    {!interests.length ? <div className="empty-state"><strong>No accepted funding requests yet</strong><p>When a company manager accepts your interest, the company and next funding steps will appear here.</p></div> : <div className="grid gap-3 md:grid-cols-2">{interests.map((interest) => <article className="rounded-xl border border-cyan-100 bg-cyan-50/40 p-4" key={interest.id}><span className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Accepted</span><h3 className="mt-1 font-semibold text-slate-900">{interest.offering_name}</h3><p className="text-sm text-slate-600">{interest.legal_name}</p><p className="mt-3 text-sm font-semibold text-slate-900">Intended amount: {Number(interest.intended_amount).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</p>{interest.decided_at && <p className="mt-1 text-xs text-slate-500">Accepted {new Date(interest.decided_at).toLocaleDateString()}</p>}{interest.decision_note && <p className="mt-3 rounded-lg bg-white p-2 text-xs text-slate-600">{interest.decision_note}</p>}<p className="mt-3 text-xs font-semibold text-cyan-800">Next steps: complete the provider verification, agreement, and funding process when enabled.</p></article>)}</div>}
+  </section>
 }
 
 function NavAuditHistory({ valuations }: { valuations: NonNullable<DashboardData['valuations']> }) {
@@ -170,7 +202,3 @@ function ActivityPanel({ isAdmin, items }: { isAdmin: boolean; items: ActivityIt
     {items.length === 0 ? <div className="empty-state"><span className="empty-icon"><FiInbox /></span><strong>{isAdmin ? 'No recent activity' : 'No fund updates yet'}</strong><p>{isAdmin ? 'New sample activity will appear here.' : 'Weâ€™ll show new fund updates here when theyâ€™re available.'}</p></div> : <div className="activity-table-wrap"><table className="activity-table"><thead><tr><th scope="col">{isAdmin ? 'Activity' : 'Fund'}</th><th scope="col">Details</th><th scope="col">Updated</th></tr></thead><tbody>{items.map((item) => <tr key={`${item.title}-${item.date}`}><td data-label={isAdmin ? 'Activity' : 'Fund'}><span className="table-title"><span className="table-row-icon">{isAdmin ? <FiUsers /> : <FiFileText />}</span>{item.title}</span></td><td className="table-detail" data-label="Details">{item.detail}</td><td className="table-date" data-label="Updated">{item.date}</td></tr>)}</tbody></table></div>}
   </section>
 }
-
-
-
-

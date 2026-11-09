@@ -1,16 +1,37 @@
-﻿import { Show } from '@clerk/react'
+import { Show, useAuth } from '@clerk/react'
 import PortalDashboard from './components/Dashboard'
 import HomeGuide from './components/HomeGuide'
 import PlatformStats from './components/PlatformStats'
 import SiteFooter from './components/SiteFooter'
 import SiteHeader from './components/SiteHeader'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { FiShield } from 'react-icons/fi'
 import './dashboard.css'
 import AuthModal, { type AuthMode } from './components/AuthModal'
 
 function App() {
-  const [authMode, setAuthMode] = useState<AuthMode | null>(null)
+  const { isLoaded, isSignedIn, signOut } = useAuth()
+  const [authMode, setAuthMode] = useState<AuthMode | null>('sign-up')
+  const [sessionReset, setSessionReset] = useState(false)
+  const resetStarted = useRef(false)
+
+  useEffect(() => {
+    if (!isLoaded || resetStarted.current) return
+    resetStarted.current = true
+    if (!isSignedIn) {
+      window.setTimeout(() => setSessionReset(true), 0)
+      return
+    }
+    const fallback = window.setTimeout(() => setSessionReset(true), 5000)
+    void signOut().finally(() => {
+      window.clearTimeout(fallback)
+      setSessionReset(true)
+    })
+  }, [isLoaded, isSignedIn, signOut])
+
+  if (!isLoaded || !sessionReset) {
+    return <main className="page-shell"><section className="state-card mt-10" role="status"><p className="state-eyebrow">SECURE PORTAL</p><h1>Preparing sign up</h1><p className="state-description">Please wait while we prepare the login screen.</p></section></main>
+  }
 
   return <main className="page-shell">
     <SiteHeader onSignIn={() => setAuthMode('sign-in')} onSignUp={() => setAuthMode('sign-up')} />
@@ -19,7 +40,7 @@ function App() {
     </section><HomeGuide/><PlatformStats/></Show>
     <Show when="signed-in"><PortalDashboard /></Show>
     <SiteFooter />
-    {authMode && <AuthModal initialMode={authMode} onClose={() => setAuthMode(null)} />}
+    <Show when="signed-out">{authMode && <AuthModal initialMode={authMode} onClose={() => setAuthMode(null)} />}</Show>
   </main>
 }
 

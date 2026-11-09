@@ -17,13 +17,17 @@ This repository contains a working sandbox/demo workflow. It does **not** make a
 - Persona KYC/identity verification launch and continuation links.
 - DocuSign agreement workflow after provider verification is approved.
 - Portfolio dashboard showing assigned funds, units, approved NAV per unit, market value, and valuation history.
-- Seller-interest capture that does not grant administrative access.
+- Published company marketplace with policy, eligibility, risk, funding terms, and document references.
+- Interested and Not interested responses for every published company offering.
+- Company-manager decisions that connect the investor and company request records.
 
 ### Administrator experience
 
-- Admin dashboard with investor, fund, and pending-review metrics.
+- Admin dashboard with investor, company, offering, interest-request, fund, and pending-review metrics.
 - Investor application review queue.
 - Approve or reject applications, with a required note for rejections.
+- Company review queue from seller signup; approving a company publishes its pending offering for approved investors.
+- Reject, request changes, approve, suspend, and pause marketplace records with review notes.
 - Provider workflow monitoring and administrative audit notes.
 - NAV valuation submission and review.
 - Approve or reject pending valuations, with a required note for rejections.
@@ -39,6 +43,8 @@ This repository contains a working sandbox/demo workflow. It does **not** make a
 - Webhook retry deduplication by provider event ID.
 - Provider state-transition validation to prevent invalid or frontend-forged workflow jumps.
 - PostgreSQL transactions and locks for review, onboarding, and NAV operations.
+- Company-manager authorization is restricted to the seller's representative membership or an explicitly assigned reviewer membership.
+- Investor/company identifiers are resolved server-side from authenticated Clerk accounts; clients cannot choose another user's identity.
 - Sandbox/production integration separation.
 - Provider credentials remain server-side and are never exposed to the client.
 
@@ -225,6 +231,7 @@ The migration runner applies, in order:
 2. PostgreSQL functions used by the application workflow.
 3. Provider onboarding workflow, webhook, and audit tables.
 4. Fund positions, NAV valuation, and NAV audit tables.
+5. Marketplace company-decision lifecycle and indexes.
 
 The same SQL can be run from `server/sql/pgadmin_setup.sql` in pgAdmin when a GUI setup is preferred. The database user must be able to create/use the required tables, indexes, functions, and schema objects.
 
@@ -271,6 +278,10 @@ Set `VITE_API_URL` in `client/.env` when the API is not running at `http://local
 - `fund_position_audit`: position change history.
 - `fund_nav_valuations`: submitted, approved, or rejected NAV valuations.
 - `fund_nav_audit`: NAV submission and review history.
+- `companies`: seller submissions, administrator status, and review notes.
+- `offerings`: company funding terms, policies, publication status, and review notes.
+- `expressions_of_interest`: investor responses, intended amounts, company decisions, and immutable investor profile snapshots.
+- `marketplace_audit_events`: company, offering, and investor-request lifecycle audit history.
 
 ### Seed fictional records
 
@@ -289,6 +300,15 @@ npm run db:seed-demo
 ```
 
 The seed script creates or refreshes fictional application, provider workflow, fund position, and approved NAV records. It is disabled when `NODE_ENV=production`, requires explicit `SEED_DEMO_DATA=true`, and uses reserved `.test` email addresses. Remove `SEED_DEMO_DATA` after seeding.
+
+To create fictional approved companies and offerings for the investor marketplace:
+
+```powershell
+cd server
+npm run db:seed-marketplace-demo
+```
+
+Seller signup creates companies and offerings as `pending_review`. An administrator must approve the company; that approval publishes its pending offering to approved investors. The admin NAV panel shows pending, approved, and rejected valuation history, while an investor sees NAV only after a position and approved valuation are assigned.
 
 ## Backend API endpoints
 
@@ -331,12 +351,12 @@ Webhook routes do not use Clerk authentication. They require valid provider sign
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/api/admin/dashboard` | Get investor, fund, pending-review, and recent-activity metrics |
+| `GET` | `/api/admin/dashboard` | Get investor, company, offering, interest, fund, pending-review, and recent-activity metrics |
 | `GET` | `/api/admin/applications` | List investor applications |
 | `PATCH` | `/api/admin/applications/:id/review` | Approve or reject a pending application |
 | `GET` | `/api/admin/workflows` | List provider onboarding workflows |
 | `POST` | `/api/admin/workflows/:applicationId/notes` | Add an audit note to a workflow |
-| `GET` | `/api/admin/nav/valuations` | List pending NAV valuations |
+| `GET` | `/api/admin/nav/valuations` | List pending and historical NAV valuations |
 | `POST` | `/api/admin/nav/valuations` | Submit a NAV valuation |
 | `PATCH` | `/api/admin/nav/valuations/:id/review` | Approve or reject a pending NAV valuation |
 | `PUT` | `/api/admin/nav/positions` | Assign or update an investor's fund units |
@@ -428,6 +448,45 @@ Before production use, the organization must approve provider choice, templates,
 | `npm start` | Start the API with Node |
 | `npm run db:migrate` | Apply all PostgreSQL migrations |
 | `npm run db:seed-demo` | Seed fictional non-production records |
+
+## Marketplace sandbox workflow
+
+Migration `005_marketplace.sql` adds jurisdiction-neutral sandbox entities for companies, company memberships, offerings, immutable offering versions, document references, non-binding expressions of interest, and append-only marketplace audit events.
+
+- Seller accounts are identified by their signup intent for seller-only draft endpoints; that intent never grants platform-admin access.
+- Sellers can create company and offering drafts from the seller workspace, then submit them for platform review.
+- Seller onboarding captures legal/display names, sector, jurisdiction, representative details, offering instrument, target and interest ranges, dates, eligibility proposals, risk information, and document references. These remain proposals until review.
+- Seller signup now collects the company and initial funding offering details and submits both records directly into `pending_review` in one transaction.
+- Platform admins are still authorized only through Clerk private metadata (`{"role":"admin"}`) and can review company and offering submissions.
+- The required order is seller submission, admin company approval, and publication of its pending offering. Approving a company publishes its pending offering; an admin can still pause or reject the offering separately.
+- Investors must have an approved investor application before they can view published offerings or submit an expression of interest.
+- The company representative created during seller signup, or an explicitly assigned company reviewer, can decide an interest only after an eligible investor submits it; provider KYC, agreement signing, and funding remain later sandbox steps.
+- Reviewer requests support `under_review`, `needs_information`, `accepted`, and `rejected` decisions; investor profile details are snapshotted onto the request for company review.
+- Investors see each published company’s funding details with `Interested` and `Not interested` actions. An interested request is routed to the assigned company reviewer, and the investor sees `submitted`, `accepted`, or `rejected` on that company card.
+- A rejected or previously submitted investor request cannot be submitted again for the same company. Migration `007_interest_lifecycle.sql` also enforces one request per investor and offering at the database level.
+- Accepted requests appear in the investor dashboard under `Accepted funding requests`; this is a workflow record, not a completed investment or fund position until funding is reconciled by operations.
+- Company reviewers are separate from platform admins. An admin may assign a reviewer with `POST /api/admin/companies/:id/reviewers`; the reviewer’s Clerk private metadata must contain `{"role":"company_reviewer"}`. The seller’s company representative can also make decisions for their own company.
+- Only approved investors can list published offerings or submit non-binding expressions of interest.
+- An expression of interest is not a subscription, purchase, allocation, completed investment, or proof of funding.
+- Real offering publication, KYC/AML, accreditation, e-signature, payments, escrow, and closing remain disabled until the organization confirms jurisdiction, offering type, intermediary status, legal documents, providers, and operating procedures.
+- To load two repeatable fictional approved companies and published offerings for local testing, set `SEED_DEMO_DATA=true` and run `npm run db:seed-marketplace-demo` from `server`. The records use the requested sandbox contact emails and are not real funding opportunities.
+- To reset the Clerk development users and user-owned test data while preserving the two fictional demo companies, set `CLEAR_TEST_DATA=true` and run `npm run db:clear-test-data` from `server`. This is destructive and must not be used against production data.
+
+New route groups include:
+
+```text
+GET/POST/PATCH /api/seller/companies
+GET/POST/PATCH /api/seller/offerings
+GET/POST        /api/investor/offerings
+GET/POST        /api/investor/interests
+GET/PATCH       /api/company-reviewer/interests (company representatives and assigned reviewers)
+GET             /api/admin/marketplace
+PATCH           /api/admin/companies/:id/review
+PATCH           /api/admin/offerings/:id/review
+POST            /api/admin/companies/:id/reviewers
+```
+
+All marketplace writes use server-side ownership/membership checks, parameterized SQL, status constraints, and audit events. The UI labels the workflow as sandbox/demo behavior and does not present simulated provider or funding results as real compliance or investment outcomes.
 | `npm test` | Run Node integration/security tests |
 
 ## Scope and limitations

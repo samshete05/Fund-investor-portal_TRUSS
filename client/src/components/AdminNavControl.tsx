@@ -4,7 +4,7 @@ import type { FormEvent } from 'react'
 import { FiCheckCircle, FiRefreshCw } from 'react-icons/fi'
 
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
-type Valuation = { id: number; fund_name: string; nav_per_unit: string; valuation_as_of: string; source: string; source_data: Record<string, unknown>; submitted_by: string }
+type Valuation = { id: number; fund_name: string; nav_per_unit: string; valuation_as_of: string; source: string; source_data: Record<string, unknown>; submitted_by: string; status: 'pending' | 'approved' | 'rejected'; review_note: string | null }
 
 export default function AdminNavControl() {
   const { getToken } = useAuth()
@@ -78,7 +78,7 @@ export default function AdminNavControl() {
     <p className="nav-admin-help">Use the Clerk user ID shown in an application review to assign or update units held in a fund.</p>
     <form className="nav-entry-form" onSubmit={assignPosition}><label>Investor Clerk user ID<input required maxLength={160} value={positionInvestorId} onChange={(e) => setPositionInvestorId(e.target.value)} /></label><label>Fund name<input required maxLength={160} value={positionFundName} onChange={(e) => setPositionFundName(e.target.value)} /></label><label>Units held<input required type="number" min="0.00000001" step="any" value={positionUnits} onChange={(e) => setPositionUnits(e.target.value)} /></label><button className="action-button nav-submit" disabled={busy}>Save position</button></form>
     {message && <p className="nav-admin-message" role="status">{message}</p>}
-    <div className="nav-pending-heading"><h3>Pending review</h3><span className="record-count">{valuations.length}</span></div>
-    {!valuations.length ? <p className="nav-admin-help">No NAV valuations awaiting review.</p> : valuations.map((item) => <article className="nav-pending-item" key={item.id}><div><strong>{item.fund_name} · {Number(item.nav_per_unit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</strong><small>{item.source} · {new Date(item.valuation_as_of).toLocaleString()}</small></div><div className="nav-review-actions"><button className="action-button" disabled={busy} onClick={() => void review(item.id, 'approved')}><FiCheckCircle /> Approve</button><button className="action-button" disabled={busy} onClick={() => void review(item.id, 'rejected')}>Reject</button></div></article>)}
+    <div className="nav-pending-heading"><h3>NAV valuation history</h3><span className="record-count">{valuations.length}</span></div>
+    {!valuations.length ? <p className="nav-admin-help">No NAV valuations have been submitted yet. Fictional demo valuations appear after running the demo seed command.</p> : valuations.map((item) => <article className="nav-pending-item" key={item.id}><div><strong>{item.fund_name} · {Number(item.nav_per_unit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</strong><small>{item.source} · {new Date(item.valuation_as_of).toLocaleString()} · Status: {item.status}</small>{item.review_note && <small>Review note: {item.review_note}</small>}</div>{item.status === 'pending' && <div className="nav-review-actions"><button className="action-button" disabled={busy} onClick={() => void review(item.id, 'approved')}><FiCheckCircle /> Approve</button><button className="action-button" disabled={busy} onClick={() => void review(item.id, 'rejected')}>Reject</button></div>}</article>)}
   </section>
 }

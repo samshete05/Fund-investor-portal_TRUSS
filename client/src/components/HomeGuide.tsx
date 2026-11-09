@@ -11,16 +11,16 @@ const steps: Record<GuideAudience, { title: string; text: string }[]> = {
   ],
   seller: [
     { title: 'Create your account', text: 'Choose Sell during signup and verify your email address.' },
-    { title: 'Share company details', text: 'Provide basic company and share information in the seller interest form.' },
-    { title: 'Request administrator access', text: 'Seller interest does not grant admin permissions. Contact a portal administrator to request access.' },
-    { title: 'Use the portal when access is assigned', text: 'An administrator assigns roles through trusted Clerk settings.' },
+    { title: 'Submit your company', text: 'Provide the company, policy, and offering details that are saved in PostgreSQL for review.' },
+    { title: 'Wait for administrator review', text: 'An administrator approves, rejects, or requests changes. Approved companies and published offerings become visible to investors.' },
+    { title: 'Review investor interest', text: 'After an investor selects Interested, review the linked investor and company request, then approve or reject it as the company manager.' },
   ],
 }
 
 export default function HomeGuide() {
   const [audience, setAudience] = useState<GuideAudience>('investor')
   return <section className="mt-10 md:mt-12" id="how-it-works" aria-labelledby="guide-title">
-    <div className="mb-5"><span className="text-[9px] font-bold tracking-[1.45px] text-[#668473]">A SIMPLE START</span><h2 id="guide-title" className="my-2 text-2xl font-semibold tracking-tight text-[#203128]">How Fundly works</h2><p className="max-w-xl text-xs leading-relaxed text-[#839087]">A clear path into the portal, whether you are exploring as an investor or sharing seller interest.</p></div>
+    <div className="mb-5"><span className="text-[9px] font-bold tracking-[1.45px] text-[#668473]">A SIMPLE START</span><h2 id="guide-title" className="my-2 text-2xl font-semibold tracking-tight text-[#203128]">How Fundly works</h2><p className="max-w-xl text-xs leading-relaxed text-[#839087]">A clear path into the portal, whether you are exploring as an investor or submitting a company for review.</p></div>
     <div className="rounded-[14px] border border-[#e5ebe6] bg-white px-5 py-5 shadow-[0_8px_28px_rgba(32,59,42,0.04)] md:px-7">
       <div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-[10px] bg-[#edf4ef] text-base text-[#5d8068]"><FiCompass /></span><div><strong className="block text-xs text-[#34443a]">Choose your guide</strong><small className="mt-1 block text-[10px] text-[#98a29b]">Four straightforward steps to get oriented.</small></div></div>
       <div className="mb-1 mt-5 flex gap-2 border-b border-[#edf0ed] pb-3" role="tablist" aria-label="How to use Fundly">

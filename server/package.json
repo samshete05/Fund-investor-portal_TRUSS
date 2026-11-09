@@ -8,6 +8,8 @@
     "start": "node src/index.js",
     "db:migrate": "node scripts/migrate.js",
     "db:seed-demo": "node scripts/seed-demo-data.js",
+    "db:seed-marketplace-demo": "node scripts/seed-marketplace-demo.js",
+    "db:clear-test-data": "node scripts/clear-test-data.js",
     "test": "node --test"
   },
   "dependencies": {

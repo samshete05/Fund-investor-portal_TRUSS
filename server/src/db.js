@@ -16,6 +16,12 @@ function database() {
 
 export async function submitInvestorApplication(payload) {
   const result = await database().query('SELECT * FROM portal.submit_investor_application($1::jsonb)', [JSON.stringify(payload)])
+  await database().query(
+    `UPDATE investor_applications
+     SET institution_name=$2, institution_people_count=$3, representative_title=$4, representative_phone=$5
+     WHERE id=$1`,
+    [result.rows[0].id, payload.institutionName ?? null, payload.institutionPeopleCount ?? null, payload.representativeTitle ?? null, payload.representativePhone ?? null],
+  )
   return result.rows[0]
 }
 
@@ -32,6 +38,15 @@ export async function getInvestorApplication(clerkUserId) {
   return result.rows[0] ?? null
 }
 
+export async function getInvestorProfileSnapshot(clerkUserId) {
+  const result = await database().query(
+    `SELECT first_name,last_name,email,phone,country_of_residence,investor_type,institution_name,representative_title
+     FROM investor_applications WHERE clerk_user_id=$1 AND status='approved'`,
+    [clerkUserId],
+  )
+  return result.rows[0] ?? null
+}
+
 export async function listAdminApplications() {
   const result = await database().query('SELECT * FROM portal.list_admin_applications()')
   return result.rows
@@ -42,8 +57,19 @@ export async function getAdminDashboard() {
     database().query(
       `SELECT
         (SELECT COUNT(*)::int FROM investor_applications) AS total_investors,
+        (SELECT COUNT(*)::int FROM investor_applications WHERE status='pending') AS pending_investors,
+        (SELECT COUNT(*)::int FROM investor_applications WHERE status='approved') AS approved_investors,
+        (SELECT COUNT(*)::int FROM investor_applications WHERE status='rejected') AS rejected_investors,
+        (SELECT COUNT(*)::int FROM companies) AS total_companies,
+        (SELECT COUNT(*)::int FROM companies WHERE status='pending_review') AS pending_companies,
+        (SELECT COUNT(*)::int FROM companies WHERE status='approved') AS approved_companies,
+        (SELECT COUNT(*)::int FROM companies WHERE status='rejected') AS rejected_companies,
+        (SELECT COUNT(*)::int FROM offerings WHERE status='published') AS published_offerings,
+        (SELECT COUNT(*)::int FROM expressions_of_interest WHERE status NOT IN ('not_interested','withdrawn')) AS active_interest_requests,
         (SELECT COUNT(DISTINCT fund_name)::int FROM fund_positions) AS active_funds,
-        (SELECT COUNT(*)::int FROM investor_applications WHERE status='pending') AS pending_reviews`,
+        (SELECT COUNT(*)::int FROM investor_applications WHERE status='pending') +
+        (SELECT COUNT(*)::int FROM companies WHERE status='pending_review') +
+        (SELECT COUNT(*)::int FROM offerings WHERE status='pending_review') AS pending_reviews`,
     ),
     database().query(
       `SELECT first_name,last_name,status,created_at FROM investor_applications ORDER BY created_at DESC LIMIT 4`,
@@ -57,6 +83,17 @@ export async function getAdminDashboard() {
       date: new Date(application.created_at).toLocaleDateString('en-US'),
     })),
   }
+}
+
+export async function getPublicStats() {
+  const result = await database().query(
+    `SELECT
+      (SELECT COUNT(*)::int FROM investor_applications WHERE status='approved') AS approved_investors,
+      (SELECT COUNT(*)::int FROM companies WHERE status='approved') AS approved_companies,
+      (SELECT COUNT(*)::int FROM offerings WHERE status='published') AS published_offerings,
+      (SELECT COUNT(DISTINCT fund_name)::int FROM fund_positions) AS active_funds`,
+  )
+  return result.rows[0]
 }
 
 export async function getInvestorNav(clerkUserId) {
@@ -137,6 +174,333 @@ export async function withApplicationLock(applicationId, operation) {
 export async function getApplicationForWorkflow(client, clerkUserId) {
   const result = await client.query('SELECT id, status, first_name, last_name, email FROM investor_applications WHERE clerk_user_id=$1', [clerkUserId])
   return result.rows[0] ?? null
+}
+
+export async function createCompany({ clerkUserId, legalName, jurisdiction, offeringType, description, authorityConfirmed }) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const company = await client.query(
+      `INSERT INTO companies (legal_name, jurisdiction, offering_type, description, authority_confirmed, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [legalName, jurisdiction, offeringType, description, authorityConfirmed, clerkUserId],
+    )
+    await client.query(
+      `INSERT INTO company_memberships (company_id, clerk_user_id, role) VALUES ($1,$2,'representative')`,
+      [company.rows[0].id, clerkUserId],
+    )
+    await client.query(
+      `INSERT INTO marketplace_audit_events (actor_clerk_user_id, entity_type, entity_id, event_type, new_status, details)
+       VALUES ($1,'company',$2,'created','draft',$3::jsonb)`,
+      [clerkUserId, company.rows[0].id, JSON.stringify({ legalName })],
+    )
+    await client.query('COMMIT')
+    return company.rows[0]
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
+export async function createSellerOnboarding({ clerkUserId, contactEmail, legalName, displayName, jurisdiction, sector, website, representativeName, representativePhone, offeringType, description, supportingDocuments, offeringName, summary, instrumentType, targetAmount, minimumInterestAmount, maximumInterestAmount, unitPrice, openingDate, closingDate, riskDisclosures, useOfProceeds, eligibilityCriteria, documentReferences, proposedTerms }) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const company = await client.query(
+      `INSERT INTO companies (legal_name,display_name,jurisdiction,sector,website,offering_type,description,contact_email,representative_name,representative_email,representative_phone,supporting_documents,authority_confirmed,status,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$8,$10,$11::jsonb,TRUE,'pending_review',$12) RETURNING *`,
+      [legalName, displayName, jurisdiction, sector, website, offeringType, description, contactEmail, representativeName, representativePhone, JSON.stringify(supportingDocuments), clerkUserId],
+    )
+    await client.query(
+      `INSERT INTO company_memberships (company_id,clerk_user_id,role) VALUES ($1,$2,'representative')`,
+      [company.rows[0].id, clerkUserId],
+    )
+    const offering = await client.query(
+      `INSERT INTO offerings (company_id,name,summary,instrument_type,target_amount,minimum_interest_amount,maximum_interest_amount,unit_price,opening_date,closing_date,proposed_terms,eligibility_criteria,risk_disclosures,use_of_proceeds,document_references,status,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15::jsonb,'pending_review',$16) RETURNING *`,
+      [company.rows[0].id, offeringName, summary, instrumentType, targetAmount, minimumInterestAmount, maximumInterestAmount, unitPrice, openingDate, closingDate, JSON.stringify(proposedTerms), JSON.stringify(eligibilityCriteria), riskDisclosures, useOfProceeds, JSON.stringify(documentReferences), clerkUserId],
+    )
+    await client.query(
+      `INSERT INTO offering_versions (offering_id,version_number,terms,eligibility_criteria,author_clerk_user_id,change_note)
+       VALUES ($1,1,$2::jsonb,'{}'::jsonb,$3,'Initial seller onboarding draft')`,
+      [offering.rows[0].id, JSON.stringify(proposedTerms), clerkUserId],
+    )
+    await client.query(
+      `INSERT INTO marketplace_audit_events (actor_clerk_user_id,entity_type,entity_id,event_type,new_status,details)
+       VALUES ($1,'company',$2,'submitted','pending_review',$3::jsonb),($1,'offering',$4,'submitted','pending_review',$3::jsonb)`,
+      [clerkUserId, company.rows[0].id, JSON.stringify({ source: 'seller_signup' }), offering.rows[0].id],
+    )
+    await client.query('COMMIT')
+    return { company: company.rows[0], offering: offering.rows[0] }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
+export async function listMemberCompanies(clerkUserId) {
+  const result = await database().query(
+    `SELECT c.*, cm.role AS membership_role
+     FROM companies c JOIN company_memberships cm ON cm.company_id=c.id
+     WHERE cm.clerk_user_id=$1 ORDER BY c.created_at DESC`, [clerkUserId],
+  )
+  return result.rows
+}
+
+export async function listMemberOfferings(clerkUserId) {
+  const result = await database().query(
+    `SELECT o.*, c.legal_name
+     FROM offerings o JOIN companies c ON c.id=o.company_id
+     JOIN company_memberships cm ON cm.company_id=c.id
+     WHERE cm.clerk_user_id=$1 AND cm.role='representative'
+     ORDER BY o.created_at DESC`, [clerkUserId],
+  )
+  return result.rows
+}
+
+export async function createOffering({ clerkUserId, companyId, name, summary, proposedTerms, eligibilityCriteria, riskDisclosures, useOfProceeds }) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const membership = await client.query(
+      `SELECT 1 FROM company_memberships WHERE company_id=$1 AND clerk_user_id=$2 AND role='representative'`,
+      [companyId, clerkUserId],
+    )
+    if (!membership.rowCount) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    const offering = await client.query(
+      `INSERT INTO offerings (company_id,name,summary,proposed_terms,eligibility_criteria,risk_disclosures,use_of_proceeds,created_by)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8) RETURNING *`,
+      [companyId, name, summary, JSON.stringify(proposedTerms), JSON.stringify(eligibilityCriteria), riskDisclosures, useOfProceeds, clerkUserId],
+    )
+    await client.query(
+      `INSERT INTO offering_versions (offering_id,version_number,terms,eligibility_criteria,author_clerk_user_id,change_note)
+       VALUES ($1,1,$2::jsonb,$3::jsonb,$4,'Initial draft')`,
+      [offering.rows[0].id, JSON.stringify(proposedTerms), JSON.stringify(eligibilityCriteria), clerkUserId],
+    )
+    await client.query(
+      `INSERT INTO marketplace_audit_events (actor_clerk_user_id,entity_type,entity_id,event_type,new_status)
+       VALUES ($1,'offering',$2,'created','draft')`, [clerkUserId, offering.rows[0].id],
+    )
+    await client.query('COMMIT')
+    return offering.rows[0]
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
+export async function listPublishedOfferings(clerkUserId) {
+  const result = await database().query(
+    `SELECT o.id,o.company_id,o.name,o.summary,o.instrument_type,o.target_amount::text,o.minimum_interest_amount::text,
+           o.maximum_interest_amount::text,o.unit_price::text,o.opening_date,o.closing_date,o.proposed_terms,
+           o.eligibility_criteria,o.risk_disclosures,o.use_of_proceeds,o.document_references,
+           c.legal_name,c.display_name,c.contact_email,c.jurisdiction,c.sector,c.website,c.offering_type,
+           e.id AS interest_id,e.status AS interest_status,e.intended_amount::text AS interest_amount,
+           e.decision_note AS interest_decision_note,e.decided_at AS interest_decided_at
+     FROM offerings o JOIN companies c ON c.id=o.company_id
+     LEFT JOIN expressions_of_interest e ON e.offering_id=o.id AND e.investor_clerk_user_id=$1
+     WHERE o.status='published' AND c.status='approved'
+     ORDER BY o.created_at DESC`, [clerkUserId],
+  )
+  return result.rows
+}
+
+export async function createExpressionOfInterest({ investorClerkUserId, offeringId, intendedAmount, note, investorProfileSnapshot, decision = 'interested' }) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const allowed = await client.query(
+      `SELECT o.id FROM offerings o JOIN companies c ON c.id=o.company_id
+       JOIN investor_applications a ON a.clerk_user_id=$1
+       WHERE o.id=$2 AND o.status='published' AND c.status='approved' AND a.status='approved'
+       AND NOT EXISTS (
+         SELECT 1 FROM expressions_of_interest existing
+         JOIN offerings existing_offering ON existing_offering.id=existing.offering_id
+         WHERE existing.investor_clerk_user_id=$1 AND existing_offering.company_id=o.company_id
+       )`,
+      [investorClerkUserId, offeringId],
+    )
+    if (!allowed.rowCount) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    const inserted = await client.query(
+      `INSERT INTO expressions_of_interest (offering_id,investor_clerk_user_id,intended_amount,note,investor_profile_snapshot,status)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6) RETURNING *`,
+      [offeringId, investorClerkUserId, intendedAmount, note, JSON.stringify(investorProfileSnapshot), decision === 'not_interested' ? 'not_interested' : 'submitted'],
+    )
+    await client.query(
+      `INSERT INTO marketplace_audit_events (actor_clerk_user_id,entity_type,entity_id,event_type,new_status,details)
+       VALUES ($1,'expression_of_interest',$2,$3,$3,$4::jsonb)`,
+      [investorClerkUserId, inserted.rows[0].id, decision === 'not_interested' ? 'not_interested' : 'submitted', JSON.stringify({ offeringId, decision })],
+    )
+    await client.query('COMMIT')
+    return inserted.rows[0]
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
+export async function listInvestorInterests(clerkUserId) {
+  const result = await database().query(
+    `SELECT e.*,o.name AS offering_name,c.legal_name
+     FROM expressions_of_interest e JOIN offerings o ON o.id=e.offering_id
+     JOIN companies c ON c.id=o.company_id
+     WHERE e.investor_clerk_user_id=$1 ORDER BY e.created_at DESC`, [clerkUserId],
+  )
+  return result.rows
+}
+
+export async function listAcceptedInvestorInterests(clerkUserId) {
+  const result = await database().query(
+    `SELECT e.id,e.intended_amount::text,e.decision_note,e.decided_at,
+       o.name AS offering_name,c.legal_name
+     FROM expressions_of_interest e
+     JOIN offerings o ON o.id=e.offering_id
+     JOIN companies c ON c.id=o.company_id
+     WHERE e.investor_clerk_user_id=$1 AND e.status='accepted'
+     ORDER BY e.decided_at DESC, e.created_at DESC`, [clerkUserId],
+  )
+  return result.rows
+}
+
+export async function listCompanyInterests(clerkUserId) {
+  const result = await database().query(
+    `SELECT e.*,o.name AS offering_name,c.id AS company_id,c.legal_name,c.display_name,
+       a.first_name,a.last_name,a.email,a.investor_type,a.institution_name,a.representative_title
+     FROM expressions_of_interest e JOIN offerings o ON o.id=e.offering_id
+     JOIN companies c ON c.id=o.company_id
+     JOIN investor_applications a ON a.clerk_user_id=e.investor_clerk_user_id
+     JOIN company_memberships cm ON cm.company_id=c.id
+     WHERE cm.clerk_user_id=$1 AND cm.role IN ('reviewer','representative') AND e.status <> 'not_interested'
+     ORDER BY e.created_at DESC`, [clerkUserId],
+  )
+  return result.rows
+}
+
+export async function decideExpression({ clerkUserId, id, status, note }) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const current = await client.query('SELECT status FROM expressions_of_interest WHERE id=$1 FOR UPDATE', [id])
+    if (!current.rowCount) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    const result = await client.query(
+      `UPDATE expressions_of_interest e SET status=$2,decision_note=$3,decided_by=$1,decided_at=NOW(),updated_at=NOW()
+       WHERE e.id=$4 AND EXISTS (
+         SELECT 1 FROM offerings o JOIN company_memberships cm ON cm.company_id=o.company_id
+         WHERE o.id=e.offering_id AND cm.clerk_user_id=$1 AND cm.role IN ('reviewer','representative')
+       ) AND e.status IN ('submitted','under_review','needs_information') RETURNING e.*`,
+      [clerkUserId, status, note, id],
+    )
+    if (!result.rowCount) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    await client.query(
+      `INSERT INTO marketplace_audit_events (actor_clerk_user_id,entity_type,entity_id,event_type,previous_status,new_status,details)
+       VALUES ($1,'expression_of_interest',$2,'decision',$3,$4,$5::jsonb)`,
+      [clerkUserId, id, current.rows[0].status, status, JSON.stringify({ note })],
+    )
+    await client.query('COMMIT')
+    return result.rows[0]
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
+export async function reviewCompany({ id, status, note, reviewer }) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const currentCompany = await client.query('SELECT status FROM companies WHERE id=$1 FOR UPDATE', [id])
+    if (!currentCompany.rowCount || !['pending_review', 'needs_changes'].includes(currentCompany.rows[0].status)) {
+      await client.query('ROLLBACK')
+      return null
+    }
+
+    const companyResult = await client.query(
+      `UPDATE companies SET status=$2,review_note=$3,reviewed_by=$4,reviewed_at=NOW(),updated_at=NOW()
+       WHERE id=$1 RETURNING *`,
+      [id, status, note, reviewer],
+    )
+    if (!companyResult.rowCount) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    const offeringStatus = status === 'approved' ? 'published' : ['rejected', 'suspended'].includes(status) ? 'paused' : null
+    if (offeringStatus) {
+      const offerings = await client.query(
+        `WITH current AS (
+           SELECT id,status FROM offerings
+           WHERE company_id=$1 AND status IN ('pending_review','approved','published')
+         )
+         UPDATE offerings o SET status=$2,review_note=$3,reviewed_by=$4,reviewed_at=NOW(),updated_at=NOW()
+         FROM current
+         WHERE o.id=current.id
+         RETURNING o.id,o.status,current.status AS previous_status`,
+        [id, offeringStatus, note || `Offering updated because company is ${status}.`, reviewer],
+      )
+      for (const offering of offerings.rows) {
+        await client.query(
+          `INSERT INTO marketplace_audit_events (actor_clerk_user_id,entity_type,entity_id,event_type,previous_status,new_status,details)
+           VALUES ($1,'offering',$2,'company_review',$3,$4,$5::jsonb)`,
+          [reviewer, offering.id, offering.previous_status, offeringStatus, JSON.stringify({ companyId: id })],
+        )
+      }
+    }
+    await client.query(
+      `INSERT INTO marketplace_audit_events (actor_clerk_user_id,entity_type,entity_id,event_type,previous_status,new_status,details)
+       VALUES ($1,'company',$2,'review',$3,$4,$5::jsonb)`,
+      [reviewer, id, currentCompany.rows[0].status, status, JSON.stringify({ note })],
+    )
+    await client.query('COMMIT')
+    return companyResult.rows[0]
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
+export async function reviewOffering({ id, status, note, reviewer }) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `WITH current AS (
+         SELECT o.id,o.status FROM offerings o
+         WHERE o.id=$1 AND o.status IN ('pending_review','needs_changes','approved','published','paused')
+           AND ($2 <> 'published' OR EXISTS (
+             SELECT 1 FROM companies c WHERE c.id=o.company_id AND c.status='approved'
+           ))
+       )
+       UPDATE offerings o SET status=$2,review_note=$3,reviewed_by=$4,reviewed_at=NOW(),updated_at=NOW()
+       FROM current WHERE o.id=current.id
+       RETURNING o.*,current.status AS previous_status`,
+      [id, status, note, reviewer],
+    )
+    if (!result.rowCount) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    await client.query(
+      `INSERT INTO marketplace_audit_events (actor_clerk_user_id,entity_type,entity_id,event_type,previous_status,new_status,details)
+       VALUES ($1,'offering',$2,'review',$3,$4,$5::jsonb)`,
+      [reviewer, id, result.rows[0].previous_status, status, JSON.stringify({ note })],
+    )
+    await client.query('COMMIT')
+    return result.rows[0]
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
 }
 
 export async function getWorkflowForApplication(client, applicationId) {
